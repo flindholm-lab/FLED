@@ -476,7 +476,7 @@ begin
         Print(' ');
       end;
     end
-    else if (ch >= ' ') and (ch <= '~') and (Length(InputStr) < 40) then
+    else if (ch >= #32) and (ch <= #255) and (Length(InputStr) < 40) then
     begin
       InputStr := InputStr + ch;
       Print(ch);
@@ -735,7 +735,7 @@ begin
       begin
         if i < BytesRead then
         begin
-          if Block[i] in [32..126] then Print(Char(Block[i])) else Print('.');
+          if Block[i] in [32..255] then Print(Char(Block[i])) else Print('.');
         end else Print(' ');
       end;
       PrintLn('');
@@ -989,8 +989,8 @@ begin
         begin
           if (i < Read1) and (i < Read2) and (Buf1[i] <> Buf2[i]) then TextColor(LightRed)
           else TextColor(White);
-          if (i < Read1) and (Buf1[i] in [32..126]) then Print(Char(Buf1[i]))
-          else if (i < Read2) and (Buf2[i] in [32..126]) then Print(Char(Buf2[i]))
+          if (i < Read1) and (Buf1[i] in [32..255]) then Print(Char(Buf1[i]))
+          else if (i < Read2) and (Buf2[i] in [32..255]) then Print(Char(Buf2[i]))
           else Print('.');
         end;
       end
@@ -1003,7 +1003,7 @@ begin
           if i < Read1 then
           begin
             if (i < Read2) and (Buf1[i] <> Buf2[i]) then TextColor(LightRed) else TextColor(LightCyan);
-            if Buf1[i] in [32..126] then Print(Char(Buf1[i])) else Print('.');
+            if Buf1[i] in [32..255] then Print(Char(Buf1[i])) else Print('.');
           end else Print(' ');
         end;
         TextColor(White); Print(' | ');
@@ -1014,7 +1014,7 @@ begin
           if i < Read2 then
           begin
             if (i < Read1) and (Buf1[i] <> Buf2[i]) then TextColor(LightRed) else TextColor(LightGreen);
-            if Buf2[i] in [32..126] then Print(Char(Buf2[i])) else Print('.');
+            if Buf2[i] in [32..255] then Print(Char(Buf2[i])) else Print('.');
           end else Print(' ');
         end;
       end;
@@ -1257,7 +1257,7 @@ begin
         end;
         #8: DoBackspace;
         #13: DoEnter;
-        #32..#126: 
+        #32..#255: 
         begin
           WriteBufferChar(ch);
           WriteVramChar(ch);
