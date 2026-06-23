@@ -560,24 +560,60 @@ end;
 
 procedure LoadTextFile(FileName: string);
 var
-  F: Text;
+  F: file;
+  Buffer: array[1..2048] of Byte;
+  BytesRead, i: Word;
   TempLine: string;
+  b: Byte;
 begin
   InitTextBuffer;
   CursorAbsX := 1; CursorAbsY := 1; ScrollTopY := 1;
   
   Assign(F, FileName);
-  {$I-} Reset(F); {$I+}
+  {$I-} Reset(F, 1); {$I+} { Open as untyped binary file to bypass ^Z EOF truncation }
   if IOResult <> 0 then Exit;
   
+  TempLine := '';
   while (not EOF(F)) and (CursorAbsY <= MAX_LINES) do
   begin
     if MaxAvail < SizeOf(TString80) then Break; { Prevent out of memory crash on huge files }
-    ReadLn(F, TempLine);
-    if Length(TempLine) > 80 then TempLine := Copy(TempLine, 1, 80);
+    
+    BlockRead(F, Buffer, SizeOf(Buffer), BytesRead);
+    if BytesRead = 0 then Break;
+    
+    for i := 1 to BytesRead do
+    begin
+      b := Buffer[i];
+      if b = 13 then Continue; { Ignore CR, handle strictly via LF }
+      
+      if b = 10 then
+      begin
+        SetLine(CursorAbsY, TempLine);
+        Inc(CursorAbsY);
+        TempLine := '';
+        if CursorAbsY > MAX_LINES then Break;
+      end
+      else
+      begin
+        TempLine := TempLine + Char(b);
+        if Length(TempLine) = 80 then
+        begin
+          { Word wrap / forced break at exactly 80 characters for binary streams }
+          SetLine(CursorAbsY, TempLine);
+          Inc(CursorAbsY);
+          TempLine := '';
+          if CursorAbsY > MAX_LINES then Break;
+        end;
+      end;
+    end;
+  end;
+  
+  if (TempLine <> '') and (CursorAbsY <= MAX_LINES) then
+  begin
     SetLine(CursorAbsY, TempLine);
     Inc(CursorAbsY);
   end;
+  
   Close(F);
   
   CursorAbsX := 1; CursorAbsY := 1; ScrollTopY := 1;
@@ -729,7 +765,7 @@ var
   Line, i, LastActiveRow: Integer;
   FSize, HexScrollTop: LongInt;
   HexCursorX, HexCursorY, HexNibble: Integer;
-  HexPart, AscPart, TempLine: string;
+  HexPart, AscPart: string;
   ch: Char;
   Done: Boolean;
   Val: Byte;
@@ -889,29 +925,13 @@ begin
   
   Close(F);
   
-  { Re-sync changes back into the text buffer seamlessly }
-  InitTextBuffer;
-  CursorAbsX := 1; CursorAbsY := 1; ScrollTopY := 1;
+  { Re-sync changes back into the text buffer seamlessly using the upgraded binary-safe loader }
+  LoadTextFile('FLED$$$.TMP');
   
-  Assign(FTemp, 'FLED$$$.TMP');
-  {$I-} Reset(FTemp); {$I+}
-  if IOResult = 0 then
-  begin
-    while (not EOF(FTemp)) and (CursorAbsY <= MAX_LINES) do
-    begin
-      if MaxAvail < SizeOf(TString80) then Break;
-      ReadLn(FTemp, TempLine);
-      if Length(TempLine) > 80 then TempLine := Copy(TempLine, 1, 80);
-      SetLine(CursorAbsY, TempLine);
-      Inc(CursorAbsY);
-    end;
-    Close(FTemp);
-    Erase(FTemp);
-  end;
+  Assign(F, 'FLED$$$.TMP');
+  {$I-} Erase(F); {$I+}
   
-  CursorAbsX := 1; CursorAbsY := 1; ScrollTopY := 1;
   CursorOn;
-  RedrawTextViewport;
 end;
 
 { Side-by-Side scrolling Visual Diff Viewer with toggle modes }
