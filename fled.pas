@@ -6,9 +6,10 @@ uses
   Dos;
 
 const
-  MAX_LINES = 100;
+  MAX_LINES = 12000; { Expanded safely using Dynamic Heap Allocation }
+  MAX_DIR_FILES = 512; { Expanded to support large directories }
   LINE_WIDTH = 80;
-  VIEWPORT_HEIGHT = 23; { Expanded to 23 lines to push info bar to row 25 }
+  VIEWPORT_HEIGHT = 23;
 
   { Custom color constants }
   Black = 0;
@@ -32,7 +33,7 @@ const
   prompt_open2  = 'Choose 2nd file to Compare:';
   prompt_save   = 'Type filename to Save:';
   prompt_search = 'Type text to Search:';
-  msg_avail     = 'Available Files (Use Arrow Keys):';
+  msg_avail     = 'Available Files (Use Arrows/PgUp/Dn):';
   
   { Typed constant allows safe array-like subscripting }
   hex_digits: string[16] = '0123456789ABCDEF';
@@ -43,7 +44,11 @@ type
     Attr: Byte;
   end;
   TVideoMemory = array[1..25, 1..80] of TScreenChar;
-  TTextBuffer = array[1..MAX_LINES] of string[80];
+  
+  { Dynamic memory structure to bypass 64KB data segment limit }
+  PString80 = ^TString80;
+  TString80 = string[80];
+  TTextBuffer = array[1..MAX_LINES] of PString80;
 
 var
   { Direct absolute pointer mapping to CGA/EGA/VGA Color VRAM text page }
@@ -51,13 +56,13 @@ var
 
   TextBuffer: TTextBuffer;
   CursorAbsX: Integer; { 1..80 }
-  CursorAbsY: Integer; { 1..100 }
-  ScrollTopY: Integer; { 1..79 }
+  CursorAbsY: Integer; { 1..MAX_LINES }
+  ScrollTopY: Integer; { 1..MAX_LINES-1 }
   
   File1Name: string;
   File2Name: string;
   
-  FileList: array[1..24] of string[14]; { Expanded to 14 to fit brackets [DIRNAME.EXT] }
+  FileList: array[1..MAX_DIR_FILES] of string[14];
   FileCount: Integer;
   SelectedFile: Integer;
 
@@ -212,13 +217,40 @@ begin
     end;
 end;
 
-{ Initialize the memory buffer with spaces }
+{ --- Heap Memory Buffer Management --- }
+function GetLine(idx: Integer): string;
+begin
+  if (idx < 1) or (idx > MAX_LINES) or (TextBuffer[idx] = nil) then
+    GetLine := ''
+  else
+    GetLine := TextBuffer[idx]^;
+end;
+
+procedure SetLine(idx: Integer; s: string);
+begin
+  if (idx >= 1) and (idx <= MAX_LINES) then
+  begin
+    if TextBuffer[idx] = nil then
+    begin
+      if MaxAvail < SizeOf(TString80) then Exit; { Protect against DOS out-of-memory crashes }
+      New(TextBuffer[idx]);
+    end;
+    TextBuffer[idx]^ := s;
+  end;
+end;
+
 procedure InitTextBuffer;
 var
   i: Integer;
 begin
   for i := 1 to MAX_LINES do
-    TextBuffer[i] := '';
+  begin
+    if TextBuffer[i] <> nil then
+    begin
+      Dispose(TextBuffer[i]);
+      TextBuffer[i] := nil;
+    end;
+  end;
 end;
 
 { Custom string copy and trimmer }
@@ -292,7 +324,7 @@ begin
     
     if (ScrollTopY + ScreenY - 1) <= MAX_LINES then
     begin
-      LineToPrint := TextBuffer[ScrollTopY + ScreenY - 1];
+      LineToPrint := GetLine(ScrollTopY + ScreenY - 1);
       Print(LineToPrint);
       if Length(LineToPrint) < 80 then
         WriteChars(' ', 80 - Length(LineToPrint));
@@ -326,7 +358,7 @@ var
 begin
   FileCount := 0;
   FindFirst('*.*', AnyFile, SR);
-  while (DosError = 0) and (FileCount < 24) do
+  while (DosError = 0) and (FileCount < MAX_DIR_FILES) do
   begin
     if (SR.Name <> '.') and ((SR.Attr and VolumeID) = 0) then
     begin
@@ -340,9 +372,9 @@ begin
   end;
 end;
 
-procedure DrawFileList;
+procedure DrawFileList(ScrollTop: Integer);
 var
-  i, Row, Col: Integer;
+  i, Row, Col, DrawCount: Integer;
 begin
   TextColor(Black);
   TextBackground(LightGray);
@@ -354,13 +386,16 @@ begin
 
   if FileCount = 0 then Exit;
 
-  for i := 1 to FileCount do
+  DrawCount := FileCount - ScrollTop;
+  if DrawCount > 24 then DrawCount := 24;
+
+  for i := 1 to DrawCount do
   begin
     Row := ((i - 1) shr 2) + 13;
     Col := ((i - 1) and 3) * 15 + 10;
     
     GotoXY(Col, Row);
-    if i - 1 = SelectedFile then
+    if (ScrollTop + i - 1) = SelectedFile then
     begin
       TextColor(White);
       TextBackground(Blue);
@@ -370,7 +405,7 @@ begin
       TextColor(Black);
       TextBackground(LightGray);
     end;
-    Print(FileList[i]);
+    Print(FileList[ScrollTop + i]);
   end;
   RestoreUIColors;
 end;
@@ -380,6 +415,7 @@ var
   ch: Char;
   Done: Boolean;
   TempName, DirName: string;
+  FileScrollTop: Integer;
 begin
   CursorOff;
   DrawDialogFrame;
@@ -390,19 +426,51 @@ begin
   
   LoadDirIntoMemory;
   SelectedFile := 0;
+  FileScrollTop := 0;
   Done := false;
   
   repeat
-    DrawFileList;
+    DrawFileList(FileScrollTop);
     ch := ReadKey;
     if ch = #0 then
     begin
       ch := ReadKey;
       case ch of
-        #72: if SelectedFile >= 4 then Dec(SelectedFile, 4);
-        #80: if SelectedFile + 4 < FileCount then Inc(SelectedFile, 4);
-        #75: if SelectedFile > 0 then Dec(SelectedFile);
-        #77: if SelectedFile + 1 < FileCount then Inc(SelectedFile);
+        #72: { Up }
+          if SelectedFile >= 4 then 
+          begin
+            Dec(SelectedFile, 4);
+            if SelectedFile < FileScrollTop then Dec(FileScrollTop, 4);
+          end;
+        #80: { Down }
+          if SelectedFile + 4 < FileCount then 
+          begin
+            Inc(SelectedFile, 4);
+            if SelectedFile >= FileScrollTop + 24 then Inc(FileScrollTop, 4);
+          end;
+        #75: { Left }
+          if SelectedFile > 0 then 
+          begin
+            Dec(SelectedFile);
+            if SelectedFile < FileScrollTop then Dec(FileScrollTop, 4);
+          end;
+        #77: { Right }
+          if SelectedFile + 1 < FileCount then 
+          begin
+            Inc(SelectedFile);
+            if SelectedFile >= FileScrollTop + 24 then Inc(FileScrollTop, 4);
+          end;
+        #73: { Page Up }
+        begin
+          if SelectedFile >= 24 then Dec(SelectedFile, 24) else SelectedFile := 0;
+          if FileScrollTop >= 24 then Dec(FileScrollTop, 24) else FileScrollTop := 0;
+        end;
+        #81: { Page Down }
+        begin
+          if SelectedFile + 24 < FileCount then Inc(SelectedFile, 24) else SelectedFile := FileCount - 1;
+          FileScrollTop := (SelectedFile shr 2) shl 2 - 20; { Keep target safely in viewport }
+          if FileScrollTop < 0 then FileScrollTop := 0;
+        end;
       end;
     end
     else if ch = #27 then
@@ -424,6 +492,7 @@ begin
           begin
             LoadDirIntoMemory;
             SelectedFile := 0;
+            FileScrollTop := 0;
           end;
         end
         else
@@ -503,9 +572,10 @@ begin
   
   while (not EOF(F)) and (CursorAbsY <= MAX_LINES) do
   begin
+    if MaxAvail < SizeOf(TString80) then Break; { Prevent out of memory crash on huge files }
     ReadLn(F, TempLine);
     if Length(TempLine) > 80 then TempLine := Copy(TempLine, 1, 80);
-    TextBuffer[CursorAbsY] := TempLine;
+    SetLine(CursorAbsY, TempLine);
     Inc(CursorAbsY);
   end;
   Close(F);
@@ -543,7 +613,7 @@ begin
   LastActiveRow := 0;
   for i := MAX_LINES downto 1 do
   begin
-    if TrimTrailingSpaces(TextBuffer[i]) <> '' then
+    if TrimTrailingSpaces(GetLine(i)) <> '' then
     begin
       LastActiveRow := i;
       Break;
@@ -552,7 +622,7 @@ begin
   
   if LastActiveRow > 0 then
     for i := 1 to LastActiveRow do
-      WriteLn(F, TrimTrailingSpaces(TextBuffer[i]));
+      WriteLn(F, TrimTrailingSpaces(GetLine(i)));
       
   Close(F);
 end;
@@ -574,7 +644,7 @@ begin
     Found := false;
     while (SearchRow <= MAX_LINES) and (not Found) do
     begin
-      ColPos := Pos(SearchStr, Copy(TextBuffer[SearchRow], SearchCol, 80));
+      ColPos := Pos(SearchStr, Copy(GetLine(SearchRow), SearchCol, 80));
       if ColPos > 0 then
       begin
         Found := true;
@@ -672,7 +742,7 @@ begin
   LastActiveRow := 0;
   for i := MAX_LINES downto 1 do
   begin
-    if TrimTrailingSpaces(TextBuffer[i]) <> '' then
+    if TrimTrailingSpaces(GetLine(i)) <> '' then
     begin
       LastActiveRow := i;
       Break;
@@ -681,7 +751,7 @@ begin
   
   if LastActiveRow > 0 then
     for i := 1 to LastActiveRow do
-      WriteLn(FTemp, TrimTrailingSpaces(TextBuffer[i]));
+      WriteLn(FTemp, TrimTrailingSpaces(GetLine(i)));
   Close(FTemp);
   
   { Open the temporary binary file to edit directly }
@@ -829,9 +899,10 @@ begin
   begin
     while (not EOF(FTemp)) and (CursorAbsY <= MAX_LINES) do
     begin
+      if MaxAvail < SizeOf(TString80) then Break;
       ReadLn(FTemp, TempLine);
       if Length(TempLine) > 80 then TempLine := Copy(TempLine, 1, 80);
-      TextBuffer[CursorAbsY] := TempLine;
+      SetLine(CursorAbsY, TempLine);
       Inc(CursorAbsY);
     end;
     Close(FTemp);
@@ -1061,18 +1132,18 @@ procedure WriteBufferChar(ch: Char);
 var
   CurrentLine: string;
 begin
-  CurrentLine := TextBuffer[CursorAbsY];
+  CurrentLine := GetLine(CursorAbsY);
   while Length(CurrentLine) < CursorAbsX do
     CurrentLine := CurrentLine + ' ';
   CurrentLine[CursorAbsX] := ch;
-  TextBuffer[CursorAbsY] := CurrentLine;
+  SetLine(CursorAbsY, CurrentLine);
 end;
 
 function ReadBufferChar: Char;
 var
   CurrentLine: string;
 begin
-  CurrentLine := TextBuffer[CursorAbsY];
+  CurrentLine := GetLine(CursorAbsY);
   if Length(CurrentLine) < CursorAbsX then
     ReadBufferChar := ' '
   else
@@ -1125,7 +1196,10 @@ end;
 
 var
   ch: Char;
+  i: Integer;
 begin
+  for i := 1 to MAX_LINES do TextBuffer[i] := nil; { Pre-initialize pointers safely }
+
   CurrentAttr := $1F;
   CurrentX := 1;
   CurrentY := 1;
