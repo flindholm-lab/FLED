@@ -1282,11 +1282,11 @@ begin
     if ViewMode = 2 then BytesPerLine := 30 else BytesPerLine := 8;
     DrawUI; GotoXY(1, 2); TextColor(Yellow);
     if ViewMode = 0 then 
-      PrintLn('Offset   | - File 1 (Hex)           | + File 2 (Hex)           | ASCII Diff')
+      PrintLn('Offset   | - File 1 (Hex)            | + File 2 (Hex)            | ASCII Diff')
     else if ViewMode = 1 then 
-      PrintLn('Offset   | - File 1 (Hex Only)      | + File 2 (Hex Only)')
+      PrintLn('Offset   | - File 1 (Hex Only)       | + File 2 (Hex Only)')
     else 
-      PrintLn('Offset   | - File 1 (ASCII)                | + File 2 (ASCII)');
+      PrintLn('Offset   | - File 1 (ASCII)                 | + File 2 (ASCII)');
     TextColor(White);
     
     for Line := 0 to 21 do
