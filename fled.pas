@@ -326,15 +326,15 @@ begin
   if File1Name = '' then 
     Print(' Editing: UNTITLED                                                           ')
   else 
-  begin 
-    Print(' Editing: ' + File1Name); 
-    WriteChars(' ', 80 - 10 - Length(File1Name)); 
-  end;
+    begin 
+      Print(' Editing: ' + File1Name); 
+      WriteChars(' ', 80 - 10 - Length(File1Name)); 
+    end;
   RestoreUIColors;
 end;
 
 procedure RedrawTextViewport;
-var i, ScreenY: Integer; LineToPrint: string;
+var ScreenY: Integer; LineToPrint: string;
 begin
   for ScreenY := 1 to VIEWPORT_HEIGHT do
   begin
@@ -360,9 +360,31 @@ begin
 end;
 
 procedure LoadDirIntoMemory;
-var SR: SearchRec;
+var 
+  SR: SearchRec;
+  CurrentPath: string;
+  DriveLoop: Byte;
 begin
   FileCount := 0;
+
+  { Check if we are sitting in a drive's root directory (e.g. 'C:\') }
+  GetDir(0, CurrentPath);
+  if Length(CurrentPath) <= 3 then
+  begin
+    { Loop through letters C to Z. (We skip A and B to avoid noisy floppy drive seeks) }
+    for DriveLoop := 3 to 26 do
+    begin
+      if DiskSize(DriveLoop) >= 0 then { Verifies that the drive configuration is active }
+      begin
+        if FileCount < MAX_DIR_FILES then
+        begin
+          Inc(FileCount);
+          FileList[FileCount] := '<' + Char(Ord('A') + DriveLoop - 1) + '>';
+        end;
+      end;
+    end;
+  end;
+
   FindFirst('*.*', AnyFile, SR);
   while (DosError = 0) and (FileCount < MAX_DIR_FILES) do
   begin
@@ -416,7 +438,11 @@ begin
 end;
 
 function GetFilenameGrid(Prompt: string): string;
-var ch: Char; Done: Boolean; TempName, DirName: string; FileScrollTop: Integer;
+var 
+  ch, DriveLetter: Char; 
+  Done: Boolean; 
+  TempName, DirName: string; 
+  FileScrollTop, DriveNum: Integer;
 begin
   CursorOff; DrawDialogFrame;
   TextColor(Black); TextBackground(LightGray);
@@ -473,13 +499,28 @@ begin
     else if ch = #27 then 
     begin 
       GetFilenameGrid := ''; Done := true; 
-    end
-    else if ch = #13 then
+    end;
+    if ch = #13 then
     begin
       if FileCount > 0 then
       begin
         TempName := FileList[SelectedFile + 1];
-        if (Length(TempName) > 2) and (TempName[1] = '[') and 
+        
+        { Process target Drive letter navigation (<C>, <D>, etc.) }
+        if (Length(TempName) = 3) and (TempName[1] = '<') and (TempName[3] = '>') then
+        begin
+          DriveLetter := TempName[2];
+          DriveNum := Ord(DriveLetter) - Ord('A');
+          asm
+            mov ah, 0Eh
+            mov dl, Byte(DriveNum)
+            int 21h
+          end;
+          {$I-} ChDir(DriveLetter + ':\'); {$I+}
+          if IOResult = 0 then;
+          LoadDirIntoMemory; SelectedFile := 0; FileScrollTop := 0;
+        end
+        else if (Length(TempName) > 2) and (TempName[1] = '[') and 
            (TempName[Length(TempName)] = ']') then
         begin
           DirName := Copy(TempName, 2, Length(TempName) - 2);
@@ -538,7 +579,11 @@ begin
 end;
 
 function GetFilenameSave(Prompt: string): string;
-var ch: Char; Done: Boolean; TempName, DirName, InputStr: string; FileScrollTop: Integer;
+var 
+  ch, DriveLetter: Char; 
+  Done: Boolean; 
+  TempName, DirName, InputStr: string; 
+  FileScrollTop, DriveNum: Integer;
 begin
   CursorOff; DrawDialogFrame;
   TextColor(Black); TextBackground(LightGray);
@@ -618,7 +663,22 @@ begin
       else if FileCount > 0 then
       begin
         TempName := FileList[SelectedFile + 1];
-        if (Length(TempName) > 2) and (TempName[1] = '[') and 
+        
+        { Process drive letter navigation inside save browser dialog }
+        if (Length(TempName) = 3) and (TempName[1] = '<') and (TempName[3] = '>') then
+        begin
+          DriveLetter := TempName[2];
+          DriveNum := Ord(DriveLetter) - Ord('A');
+          asm
+            mov ah, 0Eh
+            mov dl, Byte(DriveNum)
+            int 21h
+          end;
+          {$I-} ChDir(DriveLetter + ':\'); {$I+}
+          if IOResult = 0 then;
+          LoadDirIntoMemory; SelectedFile := 0; FileScrollTop := 0; InputStr := '';
+        end
+        else if (Length(TempName) > 2) and (TempName[1] = '[') and 
            (TempName[Length(TempName)] = ']') then
         begin
           DirName := Copy(TempName, 2, Length(TempName) - 2);
@@ -1031,9 +1091,9 @@ begin
             if IOResult = 0 then
             begin
               repeat
-                BlockRead(FTemp, ScreenBuf, SizeOf(ScreenBuf), BytesRead);
-                if BytesRead > 0 then BlockWrite(FOut, ScreenBuf, BytesRead);
-              until BytesRead = 0;
+				BlockRead(FTemp, ScreenBuf, SizeOf(ScreenBuf), BytesRead);
+				if BytesRead > 0 then BlockWrite(FOut, ScreenBuf, BytesRead);
+			until BytesRead = 0;
               Close(FOut);
               ShowSaveSuccess := true;
             end;
@@ -1064,8 +1124,8 @@ begin
             else if HexCursorX > 0 then 
             begin 
               Dec(HexCursorX); HexNibble := 1; 
-            end 
-            else if HexCursorY > 0 then 
+            end; 
+            if HexCursorY > 0 then 
             begin 
               Dec(HexCursorY); HexCursorX := 15; HexNibble := 1; 
             end 
@@ -1239,7 +1299,7 @@ begin
   end;
   
   File2Name := GetFilenameGrid(prompt_open2); 
-  RedrawTextViewport; 
+    RedrawTextViewport; 
   if File2Name = '' then Exit;
   
   Assign(F1, File1Name); Assign(F2, File2Name);
@@ -1286,7 +1346,7 @@ begin
     else if ViewMode = 1 then 
       PrintLn('Offset   | - File 1 (Hex Only)       | + File 2 (Hex Only)')
     else 
-      PrintLn('Offset   | - File 1 (ASCII)                 | + File 2 (ASCII)');
+      PrintLn('Offset   | - File 1 (ASCII)                  | + File 2 (ASCII)');
     TextColor(White);
     
     for Line := 0 to 21 do
@@ -1487,8 +1547,8 @@ begin
     begin
       WriteBufferChar(' '); WriteVramChar(' ');
     end;
-  end
-  else if CursorAbsY > 1 then
+  end;
+  if CursorAbsY > 1 then
   begin
     Dec(CursorAbsY); CursorAbsX := 80;
     if CursorAbsY < ScrollTopY then 
